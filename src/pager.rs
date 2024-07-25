@@ -70,7 +70,7 @@ pub fn parse_header(buffer: &[u8]) -> anyhow::Result<page::DbHeader> {
     let page_size_raw = read_be_word_at(buffer, HEADER_PAGE_SIZE_OFFSET);
     let page_size = match page_size_raw {
         1 => PAGE_MAX_SIZE,
-        n if ((n & (n - 1)) == 0) && n != 0 => n as u32,
+        n if n.is_power_of_two() => n as u32,
         _ => anyhow::bail!("page size is not a power of 2: {}", page_size_raw),
     };
 
