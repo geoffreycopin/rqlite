@@ -18,6 +18,13 @@ pub struct PageHeader {
 }
 
 #[derive(Debug, Clone)]
+pub struct PageData<C> {
+    pub header: PageHeader,
+    pub cell_pointers: Vec<u16>,
+    pub cells: Vec<C>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TableLeafCell {
     pub size: i64,
     pub row_id: i64,
@@ -25,13 +32,6 @@ pub struct TableLeafCell {
 }
 
 #[derive(Debug, Clone)]
-pub struct TableLeafPage {
-    pub header: PageHeader,
-    pub cell_pointers: Vec<u16>,
-    pub cells: Vec<TableLeafCell>,
-}
-
-#[derive(Debug, Clone)]
 pub enum Page {
-    TableLeaf(TableLeafPage),
+    TableLeaf(PageData<TableLeafCell>),
 }

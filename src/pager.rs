@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Context;
 
-use crate::page;
+use crate::page::{self, Page, PageData};
 
 pub const HEADER_SIZE: usize = 100;
 const HEADER_PREFIX: &[u8] = b"SQLite format 3\0";
@@ -77,16 +77,22 @@ pub fn parse_header(buffer: &[u8]) -> anyhow::Result<page::DbHeader> {
     Ok(page::DbHeader { page_size })
 }
 
-fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
+fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<Page> {
     let ptr_offset = if page_num == 1 { HEADER_SIZE as u16 } else { 0 };
 
     match buffer[0] {
-        PAGE_LEAF_TABLE_ID => parse_table_leaf_page(buffer, ptr_offset),
+        PAGE_LEAF_TABLE_ID => {
+            parse_page_data(buffer, ptr_offset, parse_table_leaf_cell).map(Page::TableLeaf)
+        }
         _ => Err(anyhow::anyhow!("unknown page type: {}", buffer[0])),
     }
 }
 
-fn parse_table_leaf_page(buffer: &[u8], ptr_offset: u16) -> anyhow::Result<page::Page> {
+fn parse_page_data<C>(
+    buffer: &[u8],
+    ptr_offset: u16,
+    parse_cell: impl Fn(&[u8]) -> anyhow::Result<C>,
+) -> anyhow::Result<PageData<C>> {
     let header = parse_page_header(buffer)?;
 
     let content_buffer = &buffer[PAGE_LEAF_HEADER_SIZE..];
@@ -94,14 +100,14 @@ fn parse_table_leaf_page(buffer: &[u8], ptr_offset: u16) -> anyhow::Result<page:
 
     let cells = cell_pointers
         .iter()
-        .map(|&ptr| parse_table_leaf_cell(&buffer[ptr as usize..]))
-        .collect::<anyhow::Result<Vec<page::TableLeafCell>>>()?;
+        .map(|&ptr| parse_cell(&buffer[ptr as usize..]))
+        .collect::<anyhow::Result<Vec<C>>>()?;
 
-    Ok(page::Page::TableLeaf(page::TableLeafPage {
+    Ok(PageData {
         header,
         cell_pointers,
         cells,
-    }))
+    })
 }
 
 fn parse_table_leaf_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableLeafCell> {
