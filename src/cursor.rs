@@ -184,6 +184,7 @@ impl<'p> Scanner<'p> {
 
                 Some(Ok(record))
             }
+            Page::TableInterior(_) => unimplemented!(),
         }
     }
 }

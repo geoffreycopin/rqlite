@@ -14,7 +14,8 @@ const HEADER_PAGE_SIZE_OFFSET: usize = 16;
 const PAGE_MAX_SIZE: u32 = 65536;
 const PAGE_LEAF_HEADER_SIZE: usize = 8;
 
-const PAGE_LEAF_TABLE_ID: u8 = 13;
+const PAGE_LEAF_TABLE_ID: u8 = 0x0d;
+const PAGE_INTERIOR_TABLE_ID: u8 = 0x05;
 
 const PAGE_FIRST_FREEBLOCK_OFFSET: usize = 1;
 const PAGE_CELL_COUNT_OFFSET: usize = 3;
@@ -79,28 +80,31 @@ pub fn parse_header(buffer: &[u8]) -> anyhow::Result<page::DbHeader> {
 
 fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<Page> {
     let ptr_offset = if page_num == 1 { HEADER_SIZE as u16 } else { 0 };
+    let header = parse_page_header(buffer)?;
 
-    match buffer[0] {
-        PAGE_LEAF_TABLE_ID => {
-            parse_page_data(buffer, ptr_offset, parse_table_leaf_cell).map(Page::TableLeaf)
+    match header.page_type {
+        page::PageType::TableLeaf => {
+            parse_page_data(buffer, header, ptr_offset, parse_table_leaf_cell).map(Into::into)
         }
-        _ => Err(anyhow::anyhow!("unknown page type: {}", buffer[0])),
+        page::PageType::TableInterior => {
+            parse_page_data(buffer, header, ptr_offset, parse_table_interior_cell).map(Into::into)
+        }
     }
 }
 
 fn parse_page_data<C>(
     buffer: &[u8],
+    header: page::PageHeader,
     ptr_offset: u16,
-    parse_cell: impl Fn(&[u8]) -> anyhow::Result<C>,
+    parse_cell_fn: impl Fn(&[u8]) -> anyhow::Result<C>,
 ) -> anyhow::Result<PageData<C>> {
-    let header = parse_page_header(buffer)?;
-
     let content_buffer = &buffer[PAGE_LEAF_HEADER_SIZE..];
+
     let cell_pointers = parse_cell_pointers(content_buffer, header.cell_count as usize, ptr_offset);
 
     let cells = cell_pointers
         .iter()
-        .map(|&ptr| parse_cell(&buffer[ptr as usize..]))
+        .map(|&ptr| parse_cell_fn(&buffer[ptr as usize..]))
         .collect::<anyhow::Result<Vec<C>>>()?;
 
     Ok(PageData {
@@ -126,9 +130,22 @@ fn parse_table_leaf_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableLeafCel
     })
 }
 
+fn parse_table_interior_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableInteriorCell> {
+    let left_child_page = read_be_double_at(buffer, 0) as i64;
+    buffer = &buffer[4..];
+
+    let (_, key) = read_varint_at(buffer, 0);
+
+    Ok(page::TableInteriorCell {
+        left_child_page,
+        key,
+    })
+}
+
 fn parse_page_header(buffer: &[u8]) -> anyhow::Result<page::PageHeader> {
     let page_type = match buffer[0] {
-        0x0d => page::PageType::TableLeaf,
+        PAGE_LEAF_TABLE_ID => page::PageType::TableLeaf,
+        PAGE_INTERIOR_TABLE_ID => page::PageType::TableInterior,
         _ => anyhow::bail!("unknown page type: {}", buffer[0]),
     };
 

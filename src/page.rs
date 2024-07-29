@@ -6,6 +6,7 @@ pub struct DbHeader {
 #[derive(Debug, Copy, Clone)]
 pub enum PageType {
     TableLeaf,
+    TableInterior,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -32,6 +33,25 @@ pub struct TableLeafCell {
 }
 
 #[derive(Debug, Clone)]
+pub struct TableInteriorCell {
+    pub left_child_page: i64,
+    pub key: i64,
+}
+
+#[derive(Debug, Clone)]
 pub enum Page {
     TableLeaf(PageData<TableLeafCell>),
+    TableInterior(PageData<TableInteriorCell>),
+}
+
+impl From<PageData<TableLeafCell>> for Page {
+    fn from(data: PageData<TableLeafCell>) -> Self {
+        Page::TableLeaf(data)
+    }
+}
+
+impl From<PageData<TableInteriorCell>> for Page {
+    fn from(data: PageData<TableInteriorCell>) -> Self {
+        Page::TableInterior(data)
+    }
 }
