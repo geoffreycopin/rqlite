@@ -5,14 +5,13 @@ use std::{
 
 use anyhow::Context;
 
-use crate::page::{self, Page, PageData};
+use crate::page;
 
 pub const HEADER_SIZE: usize = 100;
 const HEADER_PREFIX: &[u8] = b"SQLite format 3\0";
 const HEADER_PAGE_SIZE_OFFSET: usize = 16;
 
 const PAGE_MAX_SIZE: u32 = 65536;
-const PAGE_LEAF_HEADER_SIZE: usize = 8;
 
 const PAGE_LEAF_TABLE_ID: u8 = 0x0d;
 const PAGE_INTERIOR_TABLE_ID: u8 = 0x05;
@@ -21,6 +20,7 @@ const PAGE_FIRST_FREEBLOCK_OFFSET: usize = 1;
 const PAGE_CELL_COUNT_OFFSET: usize = 3;
 const PAGE_CELL_CONTENT_OFFSET: usize = 5;
 const PAGE_FRAGMENTED_BYTES_COUNT_OFFSET: usize = 7;
+const PAGE_RIGHTMOST_POINTER_OFFSET: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct Pager<I: Read + Seek = std::fs::File> {
@@ -49,7 +49,7 @@ impl<I: Read + Seek> Pager<I> {
     }
 
     fn load_page(&mut self, n: usize) -> anyhow::Result<page::Page> {
-        let offset = HEADER_SIZE + n.saturating_sub(1) * self.page_size;
+        let offset = n.saturating_sub(1) * self.page_size;
 
         self.input
             .seek(SeekFrom::Start(offset as u64))
@@ -78,43 +78,44 @@ pub fn parse_header(buffer: &[u8]) -> anyhow::Result<page::DbHeader> {
     Ok(page::DbHeader { page_size })
 }
 
-fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<Page> {
+fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
     let ptr_offset = if page_num == 1 { HEADER_SIZE as u16 } else { 0 };
-    let header = parse_page_header(buffer)?;
+    let content_buffer = &buffer[ptr_offset as usize..];
+    let header = parse_page_header(content_buffer)?;
+    let cell_pointers = parse_cell_pointers(
+        &content_buffer[header.byte_size()..],
+        header.cell_count as usize,
+        ptr_offset,
+    );
 
-    match header.page_type {
+    let cells = match header.page_type {
         page::PageType::TableLeaf => {
-            parse_page_data(buffer, header, ptr_offset, parse_table_leaf_cell).map(Into::into)
+            parse_cells(content_buffer, &cell_pointers, parse_table_leaf_cell)?
         }
         page::PageType::TableInterior => {
-            parse_page_data(buffer, header, ptr_offset, parse_table_interior_cell).map(Into::into)
+            parse_cells(content_buffer, &cell_pointers, parse_table_interior_cell)?
         }
-    }
-}
+    };
 
-fn parse_page_data<C>(
-    buffer: &[u8],
-    header: page::PageHeader,
-    ptr_offset: u16,
-    parse_cell_fn: impl Fn(&[u8]) -> anyhow::Result<C>,
-) -> anyhow::Result<PageData<C>> {
-    let content_buffer = &buffer[PAGE_LEAF_HEADER_SIZE..];
-
-    let cell_pointers = parse_cell_pointers(content_buffer, header.cell_count as usize, ptr_offset);
-
-    let cells = cell_pointers
-        .iter()
-        .map(|&ptr| parse_cell_fn(&buffer[ptr as usize..]))
-        .collect::<anyhow::Result<Vec<C>>>()?;
-
-    Ok(PageData {
+    Ok(page::Page {
         header,
         cell_pointers,
         cells,
     })
 }
 
-fn parse_table_leaf_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableLeafCell> {
+fn parse_cells(
+    buffer: &[u8],
+    cell_pointers: &[page::CellPointer],
+    parse_fn: impl Fn(&[u8]) -> anyhow::Result<page::Cell>,
+) -> anyhow::Result<Vec<page::Cell>> {
+    cell_pointers
+        .iter()
+        .map(|ptr| parse_fn(&buffer[ptr.offset as usize..]))
+        .collect()
+}
+
+fn parse_table_leaf_cell(mut buffer: &[u8]) -> anyhow::Result<page::Cell> {
     let (n, size) = read_varint_at(buffer, 0);
     buffer = &buffer[n as usize..];
 
@@ -127,11 +128,12 @@ fn parse_table_leaf_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableLeafCel
         size,
         row_id,
         payload,
-    })
+    }
+    .into())
 }
 
-fn parse_table_interior_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableInteriorCell> {
-    let left_child_page = read_be_double_at(buffer, 0) as i64;
+fn parse_table_interior_cell(mut buffer: &[u8]) -> anyhow::Result<page::Cell> {
+    let left_child_page = read_be_double_at(buffer, 0);
     buffer = &buffer[4..];
 
     let (_, key) = read_varint_at(buffer, 0);
@@ -139,13 +141,14 @@ fn parse_table_interior_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableInt
     Ok(page::TableInteriorCell {
         left_child_page,
         key,
-    })
+    }
+    .into())
 }
 
 fn parse_page_header(buffer: &[u8]) -> anyhow::Result<page::PageHeader> {
-    let page_type = match buffer[0] {
-        PAGE_LEAF_TABLE_ID => page::PageType::TableLeaf,
-        PAGE_INTERIOR_TABLE_ID => page::PageType::TableInterior,
+    let (page_type, rightmost_ptr) = match buffer[0] {
+        PAGE_LEAF_TABLE_ID => (page::PageType::TableLeaf, false),
+        PAGE_INTERIOR_TABLE_ID => (page::PageType::TableInterior, true),
         _ => anyhow::bail!("unknown page type: {}", buffer[0]),
     };
 
@@ -157,21 +160,44 @@ fn parse_page_header(buffer: &[u8]) -> anyhow::Result<page::PageHeader> {
     };
     let fragmented_bytes_count = buffer[PAGE_FRAGMENTED_BYTES_COUNT_OFFSET];
 
+    let rightmost_pointer = if rightmost_ptr {
+        Some(read_be_double_at(buffer, PAGE_RIGHTMOST_POINTER_OFFSET))
+    } else {
+        None
+    };
+
     Ok(page::PageHeader {
         page_type,
         first_freeblock,
         cell_count,
         cell_content_offset,
         fragmented_bytes_count,
+        rightmost_pointer,
     })
 }
 
-fn parse_cell_pointers(buffer: &[u8], n: usize, ptr_offset: u16) -> Vec<u16> {
-    let mut pointers = Vec::with_capacity(n);
+fn parse_cell_pointers(buffer: &[u8], n: usize, ptr_offset: u16) -> Vec<page::CellPointer> {
+    let mut offsets = Vec::with_capacity(n);
     for i in 0..n {
-        pointers.push(read_be_word_at(buffer, 2 * i) - ptr_offset);
+        offsets.push(read_be_word_at(buffer, 2 * i) - ptr_offset);
     }
-    pointers
+
+    let mut sorted_offsets = offsets.clone();
+    sorted_offsets.sort();
+
+    let rank_map = sorted_offsets
+        .into_iter()
+        .enumerate()
+        .map(|(rank, offset)| (offset, rank))
+        .collect::<HashMap<_, _>>();
+
+    offsets
+        .into_iter()
+        .map(|offset| page::CellPointer {
+            index: rank_map[&offset],
+            offset,
+        })
+        .collect()
 }
 
 pub fn read_varint_at(buffer: &[u8], mut offset: usize) -> (u8, i64) {

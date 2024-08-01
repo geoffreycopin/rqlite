@@ -3,7 +3,7 @@ pub struct DbHeader {
     pub page_size: u32,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum PageType {
     TableLeaf,
     TableInterior,
@@ -16,13 +16,36 @@ pub struct PageHeader {
     pub cell_count: u16,
     pub cell_content_offset: u32,
     pub fragmented_bytes_count: u8,
+    pub rightmost_pointer: Option<u32>,
+}
+
+impl PageHeader {
+    pub fn byte_size(&self) -> usize {
+        if self.rightmost_pointer.is_some() {
+            12
+        } else {
+            8
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct PageData<C> {
+pub struct Page {
     pub header: PageHeader,
-    pub cell_pointers: Vec<u16>,
-    pub cells: Vec<C>,
+    pub cell_pointers: Vec<CellPointer>,
+    pub cells: Vec<Cell>,
+}
+
+impl Page {
+    pub fn get(&self, n: usize) -> Option<&Cell> {
+        self.cells.get(n)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct CellPointer {
+    pub index: usize,
+    pub offset: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -34,24 +57,24 @@ pub struct TableLeafCell {
 
 #[derive(Debug, Clone)]
 pub struct TableInteriorCell {
-    pub left_child_page: i64,
+    pub left_child_page: u32,
     pub key: i64,
 }
 
 #[derive(Debug, Clone)]
-pub enum Page {
-    TableLeaf(PageData<TableLeafCell>),
-    TableInterior(PageData<TableInteriorCell>),
+pub enum Cell {
+    TableLeaf(TableLeafCell),
+    TableInterior(TableInteriorCell),
 }
 
-impl From<PageData<TableLeafCell>> for Page {
-    fn from(data: PageData<TableLeafCell>) -> Self {
-        Page::TableLeaf(data)
+impl From<TableLeafCell> for Cell {
+    fn from(cell: TableLeafCell) -> Self {
+        Cell::TableLeaf(cell)
     }
 }
 
-impl From<PageData<TableInteriorCell>> for Page {
-    fn from(data: PageData<TableInteriorCell>) -> Self {
-        Page::TableInterior(data)
+impl From<TableInteriorCell> for Cell {
+    fn from(cell: TableInteriorCell) -> Self {
+        Cell::TableInterior(cell)
     }
 }
