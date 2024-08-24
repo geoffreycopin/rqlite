@@ -106,12 +106,12 @@ fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
 
 fn parse_cells(
     buffer: &[u8],
-    cell_pointers: &[page::CellPointer],
+    cell_pointers: &[u16],
     parse_fn: impl Fn(&[u8]) -> anyhow::Result<page::Cell>,
 ) -> anyhow::Result<Vec<page::Cell>> {
     cell_pointers
         .iter()
-        .map(|ptr| parse_fn(&buffer[ptr.offset as usize..]))
+        .map(|&ptr| parse_fn(&buffer[ptr as usize..]))
         .collect()
 }
 

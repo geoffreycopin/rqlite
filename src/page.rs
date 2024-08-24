@@ -32,7 +32,7 @@ impl PageHeader {
 #[derive(Debug, Clone)]
 pub struct Page {
     pub header: PageHeader,
-    pub cell_pointers: Vec<CellPointer>,
+    pub cell_pointers: Vec<u16>,
     pub cells: Vec<Cell>,
 }
 
@@ -40,12 +40,6 @@ impl Page {
     pub fn get(&self, n: usize) -> Option<&Cell> {
         self.cells.get(n)
     }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct CellPointer {
-    pub index: usize,
-    pub offset: u16,
 }
 
 #[derive(Debug, Clone)]
