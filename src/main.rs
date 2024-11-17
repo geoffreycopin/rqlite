@@ -6,6 +6,7 @@ mod cursor;
 mod db;
 mod page;
 mod pager;
+mod sql;
 mod value;
 
 fn main() -> anyhow::Result<()> {
@@ -22,9 +23,14 @@ fn cli(mut db: db::Db) -> anyhow::Result<()> {
         match line_buffer.trim() {
             ".exit" => break,
             ".tables" => display_tables(&mut db)?,
-            _ => {
-                println!("Unrecognized command '{}'", line_buffer.trim());
-            }
+            stmt => match sql::parse_statement(stmt) {
+                Ok(stmt) => {
+                    println!("{:?}", stmt);
+                }
+                Err(e) => {
+                    println!("Error: {}", e);
+                }
+            },
         }
 
         print_flushed("\nrqlite> ")?;
