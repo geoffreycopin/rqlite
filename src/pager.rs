@@ -88,14 +88,12 @@ fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
         ptr_offset,
     );
 
-    let cells = match header.page_type {
-        page::PageType::TableLeaf => {
-            parse_cells(content_buffer, &cell_pointers, parse_table_leaf_cell)?
-        }
-        page::PageType::TableInterior => {
-            parse_cells(content_buffer, &cell_pointers, parse_table_interior_cell)?
-        }
+    let cells_parsing_fn = match header.page_type {
+        page::PageType::TableLeaf => parse_table_leaf_cell,
+        page::PageType::TableInterior => parse_table_interior_cell,
     };
+
+    let cells = parse_cells(content_buffer, &cell_pointers, cells_parsing_fn)?;
 
     Ok(page::Page {
         header,
@@ -176,28 +174,12 @@ fn parse_page_header(buffer: &[u8]) -> anyhow::Result<page::PageHeader> {
     })
 }
 
-fn parse_cell_pointers(buffer: &[u8], n: usize, ptr_offset: u16) -> Vec<page::CellPointer> {
-    let mut offsets = Vec::with_capacity(n);
+fn parse_cell_pointers(buffer: &[u8], n: usize, ptr_offset: u16) -> Vec<u16> {
+    let mut pointers = Vec::with_capacity(n);
     for i in 0..n {
-        offsets.push(read_be_word_at(buffer, 2 * i) - ptr_offset);
+        pointers.push(read_be_word_at(buffer, 2 * i) - ptr_offset);
     }
-
-    let mut sorted_offsets = offsets.clone();
-    sorted_offsets.sort();
-
-    let rank_map = sorted_offsets
-        .into_iter()
-        .enumerate()
-        .map(|(rank, offset)| (offset, rank))
-        .collect::<HashMap<_, _>>();
-
-    offsets
-        .into_iter()
-        .map(|offset| page::CellPointer {
-            index: rank_map[&offset],
-            offset,
-        })
-        .collect()
+    pointers
 }
 
 pub fn read_varint_at(buffer: &[u8], mut offset: usize) -> (u8, i64) {

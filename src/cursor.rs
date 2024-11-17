@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 
-use crate::page::PageType;
 use crate::{
-    page::{Cell, Page},
+    page::{Cell, Page, PageType},
     pager::Pager,
     value::Value,
 };
@@ -183,7 +182,7 @@ impl PositionedPage {
 pub struct Scanner<'p> {
     pager: &'p mut Pager,
     initial_page: usize,
-    parents: Vec<PositionedPage>,
+    page_stack: Vec<PositionedPage>,
 }
 
 impl<'p> Scanner<'p> {
@@ -191,7 +190,7 @@ impl<'p> Scanner<'p> {
         Scanner {
             pager,
             initial_page: page,
-            parents: Vec::new(),
+            page_stack: Vec::new(),
         }
     }
 
@@ -201,13 +200,13 @@ impl<'p> Scanner<'p> {
                 Ok(Some(ScannerElem::Cursor(cursor))) => return Ok(Some(cursor)),
                 Ok(Some(ScannerElem::Page(page_num))) => {
                     let new_page = self.pager.read_page(page_num as usize)?.clone();
-                    self.parents.push(PositionedPage {
+                    self.page_stack.push(PositionedPage {
                         page: new_page,
                         cell: 0,
                     });
                 }
-                Ok(None) if self.parents.len() > 1 => {
-                    self.parents.pop();
+                Ok(None) if self.page_stack.len() > 1 => {
+                    self.page_stack.pop();
                 }
                 Ok(None) => return Ok(None),
                 Err(e) => return Err(e),
@@ -241,16 +240,16 @@ impl<'p> Scanner<'p> {
     }
 
     fn current_page(&mut self) -> anyhow::Result<Option<&mut PositionedPage>> {
-        if self.parents.is_empty() {
+        if self.page_stack.is_empty() {
             let page = match self.pager.read_page(self.initial_page) {
                 Ok(page) => page.clone(),
                 Err(e) => return Err(e),
             };
 
-            self.parents.push(PositionedPage { page, cell: 0 });
+            self.page_stack.push(PositionedPage { page, cell: 0 });
         }
 
-        Ok(self.parents.last_mut())
+        Ok(self.page_stack.last_mut())
     }
 }
 
