@@ -84,7 +84,7 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    pub fn field(&mut self, n: usize) -> Option<Value> {
+    pub fn field(&self, n: usize) -> Option<Value> {
         let record_field = self.header.fields.get(n)?;
 
         match record_field.field_type {

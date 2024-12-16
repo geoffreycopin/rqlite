@@ -1,11 +1,10 @@
+use crate::page;
+use anyhow::{anyhow, Context};
+use std::sync::{Arc, RwLock};
 use std::{
     collections::HashMap,
     io::{Read, Seek, SeekFrom},
 };
-
-use anyhow::Context;
-
-use crate::page;
 
 pub const HEADER_SIZE: usize = 100;
 const HEADER_PREFIX: &[u8] = b"SQLite format 3\0";
@@ -24,41 +23,45 @@ const PAGE_RIGHTMOST_POINTER_OFFSET: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct Pager<I: Read + Seek = std::fs::File> {
-    input: I,
+    data: Arc<RwLock<(I, HashMap<usize, page::Page>)>>,
     page_size: usize,
-    pages: HashMap<usize, page::Page>,
 }
 
 impl<I: Read + Seek> Pager<I> {
     pub fn new(input: I, page_size: usize) -> Self {
         Self {
-            input,
             page_size,
-            pages: HashMap::new(),
+            data: Arc::new(RwLock::new((input, HashMap::new()))),
         }
     }
 
-    pub fn read_page(&mut self, n: usize) -> anyhow::Result<&page::Page> {
-        if self.pages.contains_key(&n) {
-            return Ok(self.pages.get(&n).unwrap());
+    pub fn read_page(&mut self, n: usize) -> anyhow::Result<page::Page> {
+        {
+            let pages = &self.data.read().map_err(|_| anyhow!("poisoned lock"))?.1;
+            if let Some(page) = pages.get(&n) {
+                return Ok(page.clone());
+            }
         }
 
-        let page = self.load_page(n)?;
-        self.pages.insert(n, page);
-        Ok(self.pages.get(&n).unwrap())
+        self.load_page(n)
     }
 
     fn load_page(&mut self, n: usize) -> anyhow::Result<page::Page> {
         let offset = n.saturating_sub(1) * self.page_size;
 
-        self.input
+        let mut write = self.data.write().map_err(|_| anyhow!("poisoned lock"))?;
+
+        write
+            .0
             .seek(SeekFrom::Start(offset as u64))
-            .context("seek to page start")?;
+            .context("seel to page start")?;
 
         let mut buffer = vec![0; self.page_size];
-        self.input.read_exact(&mut buffer).context("read page")?;
+        write.0.read_exact(&mut buffer).context("read page")?;
 
-        parse_page(&buffer, n)
+        let page = parse_page(&buffer, n)?;
+        write.1.insert(n, page.clone());
+        Ok(page)
     }
 }
 

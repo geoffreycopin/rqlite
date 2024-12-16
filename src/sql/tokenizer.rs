@@ -1,7 +1,14 @@
+use anyhow::bail;
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum Token {
+    Create,
+    Table,
     Select,
+    As,
     From,
+    LPar,
+    RPar,
     Star,
     Comma,
     SemiColon,
@@ -23,6 +30,8 @@ pub fn tokenize(input: &str) -> anyhow::Result<Vec<Token>> {
 
     while let Some(c) = chars.next() {
         match c {
+            '(' => tokens.push(Token::LPar),
+            ')' => tokens.push(Token::RPar),
             '*' => tokens.push(Token::Star),
             ',' => tokens.push(Token::Comma),
             ';' => tokens.push(Token::SemiColon),
@@ -34,12 +43,15 @@ pub fn tokenize(input: &str) -> anyhow::Result<Vec<Token>> {
                 }
 
                 match ident.as_str() {
+                    "create" => tokens.push(Token::Create),
+                    "table" => tokens.push(Token::Table),
                     "select" => tokens.push(Token::Select),
+                    "as" => tokens.push(Token::As),
                     "from" => tokens.push(Token::From),
                     _ => tokens.push(Token::Identifier(ident)),
                 }
             }
-            _ => return Err(anyhow::anyhow!("unexpected character: {}", c)),
+            _ => bail!("unexpected character: {}", c),
         }
     }
 
@@ -52,10 +64,14 @@ mod tests {
 
     #[test]
     fn tokenize_select() {
-        let input = "SeLect * FroM TableName_1;";
+        let input = "SeLect *, col as c FroM TableName_1;";
         let expected = vec![
             Token::Select,
             Token::Star,
+            Token::Comma,
+            Token::Identifier("col".to_string()),
+            Token::As,
+            Token::Identifier("c".to_string()),
             Token::From,
             Token::Identifier("tablename_1".to_string()),
             Token::SemiColon,

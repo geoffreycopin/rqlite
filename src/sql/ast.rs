@@ -1,6 +1,27 @@
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Statement {
     Select(SelectStatement),
+    CreateTable(CreateTableStatement),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CreateTableStatement {
+    pub name: String,
+    pub columns: Vec<ColumnDef>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ColumnDef {
+    pub name: String,
+    pub col_type: Type,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Type {
+    Integer,
+    Real,
+    Text,
+    Blob,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -17,7 +38,13 @@ pub struct SelectCore {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ResultColumn {
     Star,
-    Expr(Expr),
+    Expr(ExprResultColumn),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ExprResultColumn {
+    pub expr: Expr,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
