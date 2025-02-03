@@ -6,7 +6,7 @@ use crate::{
     cursor::{Cursor, Scanner},
     page::DbHeader,
     pager::{self, Pager},
-    sql::{self, ast, ast::CreateTableStatement},
+    sql::{self, ast},
 };
 
 #[derive(Debug, Clone)]
@@ -16,10 +16,8 @@ pub struct TableMetadata {
     pub first_page: usize,
 }
 
-impl TryFrom<Cursor> for Option<TableMetadata> {
-    type Error = anyhow::Error;
-
-    fn try_from(cursor: Cursor) -> Result<Self, Self::Error> {
+impl TableMetadata {
+    fn from_cursor(cursor: Cursor) -> anyhow::Result<Option<Self>> {
         let type_value = cursor
             .field(0)
             .context("missing type field")
@@ -50,16 +48,6 @@ impl TryFrom<Cursor> for Option<TableMetadata> {
             columns: create.columns,
             first_page,
         }))
-    }
-}
-
-impl From<CreateTableStatement> for TableMetadata {
-    fn from(value: CreateTableStatement) -> Self {
-        TableMetadata {
-            name: value.name,
-            columns: value.columns,
-            first_page: 0,
-        }
     }
 }
 
@@ -102,7 +90,7 @@ impl Db {
         let mut scanner = Scanner::new(pager, 1);
 
         while let Some(record) = scanner.next_record()? {
-            if let Some(m) = record.try_into()? {
+            if let Some(m) = TableMetadata::from_cursor(record)? {
                 metadata.push(m);
             }
         }

@@ -20,7 +20,7 @@ impl ParserState {
     }
 
     fn parse_statement(&mut self) -> anyhow::Result<Statement> {
-        match self.peak_next_token().context("unexpected end of input")? {
+        match self.peek_next_token().context("unexpected end of input")? {
             Token::Select => self.parse_select().map(Statement::Select),
             Token::Create => self.parse_create_table().map(Statement::CreateTable),
             token => bail!("unexpected token: {token:?}"),
@@ -88,7 +88,7 @@ impl ParserState {
     }
 
     fn parse_result_column(&mut self) -> anyhow::Result<ResultColumn> {
-        if self.peak_next_token()? == &Token::Star {
+        if self.peek_next_token()? == &Token::Star {
             self.advance();
             return Ok(ResultColumn::Star);
         }
@@ -134,7 +134,7 @@ impl ParserState {
         }
     }
 
-    fn peak_next_token(&self) -> anyhow::Result<&Token> {
+    fn peek_next_token(&self) -> anyhow::Result<&Token> {
         self.tokens.get(self.pos).context("unexpected end of input")
     }
 
@@ -151,15 +151,18 @@ impl ParserState {
     }
 }
 
-pub fn parse_statement(input: &str) -> anyhow::Result<Statement> {
+pub fn parse_statement(input: &str, trailing_semicolon: bool) -> anyhow::Result<Statement> {
     let tokens = tokenizer::tokenize(input)?;
     let mut state = ParserState::new(tokens);
     let statement = state.parse_statement()?;
+    if trailing_semicolon {
+        state.expect_eq(Token::SemiColon)?;
+    }
     Ok(statement)
 }
 
 pub fn parse_create_statement(input: &str) -> anyhow::Result<CreateTableStatement> {
-    match parse_statement(input)? {
+    match parse_statement(input, false)? {
         Statement::CreateTable(c) => Ok(c),
         Statement::Select(_) => bail!("expected a create statement"),
     }
@@ -172,7 +175,7 @@ mod tests {
     #[test]
     fn create_table() {
         let input = "create table table1(key integer, value text)";
-        let statement = parse_statement(input).unwrap();
+        let statement = parse_statement(input, false).unwrap();
         assert_eq!(
             statement,
             Statement::CreateTable(CreateTableStatement {
@@ -194,7 +197,7 @@ mod tests {
     #[test]
     fn select_star_from_table() {
         let input = "select * from table1";
-        let statement = parse_statement(input).unwrap();
+        let statement = parse_statement(input, false).unwrap();
         assert_eq!(
             statement,
             Statement::Select(SelectStatement {
@@ -208,8 +211,8 @@ mod tests {
 
     #[test]
     fn select_columns_from_table() {
-        let input = "select col1 as first, col2 from table1";
-        let statement = parse_statement(input).unwrap();
+        let input = "select col1 as first, col2 from table1;";
+        let statement = parse_statement(input, true).unwrap();
         assert_eq!(
             statement,
             Statement::Select(SelectStatement {
@@ -228,7 +231,7 @@ mod tests {
                             alias: None
                         }),
                     ],
-                    from: SelectFrom::Table("table".to_string()),
+                    from: SelectFrom::Table("table1".to_string()),
                 },
             })
         );

@@ -23,7 +23,7 @@ fn cli(mut db: db::Db) -> anyhow::Result<()> {
         match line_buffer.trim() {
             ".exit" => break,
             ".tables" => display_tables(&mut db)?,
-            stmt => match sql::parse_statement(stmt) {
+            stmt => match sql::parse_statement(stmt, true) {
                 Ok(stmt) => {
                     println!("{:?}", stmt);
                 }
