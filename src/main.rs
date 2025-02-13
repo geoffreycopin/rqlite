@@ -4,6 +4,7 @@ use anyhow::Context;
 
 mod cursor;
 mod db;
+mod engine;
 mod page;
 mod pager;
 mod sql;
@@ -23,14 +24,7 @@ fn cli(mut db: db::Db) -> anyhow::Result<()> {
         match line_buffer.trim() {
             ".exit" => break,
             ".tables" => display_tables(&mut db)?,
-            stmt => match sql::parse_statement(stmt, true) {
-                Ok(stmt) => {
-                    println!("{:?}", stmt);
-                }
-                Err(e) => {
-                    println!("Error: {}", e);
-                }
-            },
+            stmt => eval_query(&db, stmt)?,
         }
 
         print_flushed("\nrqlite> ")?;
@@ -51,4 +45,21 @@ fn display_tables(db: &mut db::Db) -> anyhow::Result<()> {
 fn print_flushed(s: &str) -> anyhow::Result<()> {
     print!("{}", s);
     std::io::stdout().flush().context("flush stdout")
+}
+
+fn eval_query(db: &db::Db, query: &str) -> anyhow::Result<()> {
+    let parsed_query = sql::parse_statement(query, false)?;
+    let mut op = engine::plan::Planner::new(db).compile(&parsed_query)?;
+
+    while let Some(values) = op.next_row()? {
+        let formated = values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+
+        println!("{formated}");
+    }
+
+    Ok(())
 }
