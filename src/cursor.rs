@@ -1,9 +1,9 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use crate::{
     page::{Cell, Page, PageType},
     pager::Pager,
-    value::Value,
+    value::{OwnedValue, Value},
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -84,6 +84,10 @@ pub struct Cursor {
 }
 
 impl Cursor {
+    pub fn owned_field(&self, n: usize) -> Option<OwnedValue> {
+        self.field(n).map(Into::into)
+    }
+
     pub fn field(&self, n: usize) -> Option<Value> {
         let record_field = self.header.fields.get(n)?;
 
@@ -120,7 +124,8 @@ impl Cursor {
                 let value = &self.payload[record_field.offset..record_field.offset + length];
                 Some(Value::Blob(Cow::Borrowed(value)))
             }
-            _ => panic!("unimplemented"),
+            RecordFieldType::One => Some(Value::Int(1)),
+            RecordFieldType::Zero => Some(Value::Int(0)),
         }
     }
 }
@@ -155,7 +160,7 @@ fn read_f64_at(input: &[u8], offset: usize) -> f64 {
 
 #[derive(Debug)]
 pub struct PositionedPage {
-    pub page: Page,
+    pub page: Arc<Page>,
     pub cell: usize,
 }
 
@@ -179,18 +184,18 @@ impl PositionedPage {
 }
 
 #[derive(Debug)]
-pub struct Scanner<'p> {
-    pager: &'p mut Pager,
+pub struct Scanner {
     initial_page: usize,
     page_stack: Vec<PositionedPage>,
+    pager: Pager,
 }
 
-impl<'p> Scanner<'p> {
-    pub fn new(pager: &'p mut Pager, page: usize) -> Scanner<'p> {
+impl Scanner {
+    pub fn new(page: usize, pager: Pager) -> Scanner {
         Scanner {
-            pager,
             initial_page: page,
             page_stack: Vec::new(),
+            pager,
         }
     }
 
