@@ -112,8 +112,6 @@ Two things to note here:
 - We use a somewhat convoluted expression to check if the page size is a power of 2.
   The expression `n & (n - 1) == 0` is true if and only if `n` is a power of 2, except for `n = 0`.
 
-%%[zenyth-support]
-
 ## Decoding Table B-tree leaf pages
 
 ![](https://cdn.hashnode.com/res/hashnode/image/upload/v1721571943115/f84ad91d-d3a3-462e-8f2b-1b1975badb1a.png align="
@@ -325,7 +323,7 @@ impl<I: Read + Seek> Pager<I> {
     }
 
     fn load_page(&mut self, n: usize) -> anyhow::Result<page::Page> {
-        let offset = HEADER_SIZE + n.saturating_sub(1) * self.page_size;
+        let offset = n.saturating_sub(1) * self.page_size;
 
         self.input
             .seek(SeekFrom::Start(offset as u64))
