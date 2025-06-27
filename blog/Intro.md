@@ -262,25 +262,36 @@ fn parse_table_leaf_cell(mut buffer: &[u8]) -> anyhow::Result<page::TableLeafCel
     })
 }
 
-fn read_varint_at(buffer: &[u8], mut offset: usize) -> (u8, i64) {
+pub fn read_varint_at(buffer: &[u8], mut offset: usize) -> (u8, i64) {
     let mut size = 0;
     let mut result = 0;
 
-    while size < 8 && buffer[offset] >= 0b1000_0000 {
-        result |= ((buffer[offset] as i64) & 0b0111_1111) << (7 * size);
+    while size < 9 {
+        let current_byte = buffer[offset] as i64;
+        if size == 8 {
+            result = (result << 8) | current_byte;
+        } else {
+            result = (result << 7) | (current_byte & 0b0111_1111);
+        }
+
         offset += 1;
         size += 1;
+
+        if current_byte & 0b1000_0000 == 0 {
+            break;
+        }
     }
 
-    result |= (buffer[offset] as i64) << (7 * size);
-
-    (size + 1, result)
+    (size, result)
 }
 ```
 
-To read a varint, we copy the 7 least significant bits of each byte to the result, as long as
-the most significant bit is set. As the maximum length of a varint is 9 bytes, we
-stop after reading 8 bytes to avoid potential overflows.
+To read a varint, we copy the 7 least significant bits of each byte to the result, as long as the most significant bit is set. As the maximum length of a varint is 9 bytes, keep track of 
+the number of bytes visited and stop after a maximum of 9 bytes. Note that to
+complete a 64 bits value, we need the first 7 bits of the first 8 bytes
+and all the bits of the last byte. That's why we test the current size 
+of the varint at each iteration and add a special case for the last byte (when `size == 8`).
+
 
 We can finally implement the pager itself. For now, it only loads and caches pages without
 any eviction policy:

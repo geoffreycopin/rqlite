@@ -218,15 +218,23 @@ pub fn read_varint_at(buffer: &[u8], mut offset: usize) -> (u8, i64) {
     let mut size = 0;
     let mut result = 0;
 
-    while size < 8 && buffer[offset] >= 0b1000_0000 {
-        result |= ((buffer[offset] as i64) & 0b0111_1111) << (7 * size);
+    while size < 9 {
+        let current_byte = buffer[offset] as i64;
+        if size == 8 {
+            result = (result << 8) | current_byte;
+        } else {
+            result = (result << 7) | (current_byte & 0b0111_1111);
+        }
+
         offset += 1;
         size += 1;
+
+        if current_byte & 0b1000_0000 == 0 {
+            break;
+        }
     }
 
-    result |= (buffer[offset] as i64) << (7 * size);
-
-    (size + 1, result)
+    (size, result)
 }
 
 fn read_be_double_at(input: &[u8], offset: usize) -> u32 {
@@ -249,7 +257,7 @@ mod test {
 
     #[test]
     fn middle_varint() {
-        let buffer = [0b1111_1111, 0b0000_0001];
+        let buffer = [0b1000_0001, 0b0111_1111];
         assert_eq!(read_varint_at(&buffer, 0), (2, 255));
     }
 
@@ -270,7 +278,7 @@ mod test {
             read_varint_at(&buffer, 0),
             (
                 9,
-                0b01101101_00000000_00000000_00000000_00000000_00000000_00111111_10000000
+                0b00000001_11111100_00000000_00000000_00000000_00000000_00000000_01101101,
             )
         );
     }
