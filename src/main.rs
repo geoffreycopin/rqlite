@@ -1,4 +1,4 @@
-use std::io::{stdin, BufRead, Write};
+use std::io::{BufRead, Write, stdin};
 
 use anyhow::Context;
 
@@ -43,7 +43,7 @@ fn display_tables(db: &mut db::Db) -> anyhow::Result<()> {
 }
 
 fn print_flushed(s: &str) -> anyhow::Result<()> {
-    print!("{}", s);
+    print!("{s}");
     std::io::stdout().flush().context("flush stdout")
 }
 

@@ -21,10 +21,7 @@ pub enum PageType {
 #[derive(Debug, Copy, Clone)]
 pub struct PageHeader {
     pub page_type: PageType,
-    pub first_freeblock: u16,
     pub cell_count: u16,
-    pub cell_content_offset: u32,
-    pub fragmented_bytes_count: u8,
     pub rightmost_pointer: Option<u32>,
 }
 
@@ -42,7 +39,7 @@ impl PageHeader {
         db_header: &DbHeader,
         payload_size: usize,
     ) -> anyhow::Result<(usize, Option<usize>)> {
-        let local = self.local_payload_size(&db_header, payload_size)?;
+        let local = self.local_payload_size(db_header, payload_size)?;
         if local == payload_size {
             Ok((local, None))
         } else {
@@ -75,7 +72,6 @@ impl PageHeader {
 #[derive(Debug, Clone)]
 pub struct Page {
     pub header: PageHeader,
-    pub cell_pointers: Vec<u16>,
     pub cells: Vec<Cell>,
 }
 
@@ -87,8 +83,6 @@ impl Page {
 
 #[derive(Debug, Clone)]
 pub struct TableLeafCell {
-    pub size: i64,
-    pub row_id: i64,
     pub payload: Vec<u8>,
     pub first_overflow: Option<usize>,
 }
@@ -96,7 +90,6 @@ pub struct TableLeafCell {
 #[derive(Debug, Clone)]
 pub struct TableInteriorCell {
     pub left_child_page: u32,
-    pub key: i64,
 }
 
 #[derive(Debug, Clone)]

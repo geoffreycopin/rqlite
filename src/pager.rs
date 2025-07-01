@@ -18,10 +18,7 @@ const PAGE_MAX_SIZE: u32 = 65536;
 const PAGE_LEAF_TABLE_ID: u8 = 0x0d;
 const PAGE_INTERIOR_TABLE_ID: u8 = 0x05;
 
-const PAGE_FIRST_FREEBLOCK_OFFSET: usize = 1;
 const PAGE_CELL_COUNT_OFFSET: usize = 3;
-const PAGE_CELL_CONTENT_OFFSET: usize = 5;
-const PAGE_FRAGMENTED_BYTES_COUNT_OFFSET: usize = 7;
 const PAGE_RIGHTMOST_POINTER_OFFSET: usize = 8;
 
 #[derive(Debug, Clone)]
@@ -205,11 +202,7 @@ fn parse_page(db_header: &DbHeader, buffer: &[u8], page_num: usize) -> anyhow::R
         cells_parsing_fn,
     )?;
 
-    Ok(page::Page {
-        header,
-        cell_pointers,
-        cells,
-    })
+    Ok(page::Page { header, cells })
 }
 
 fn parse_cells(
@@ -233,7 +226,7 @@ fn parse_table_leaf_cell(
     let (n, size) = read_varint_at(buffer, 0);
     buffer = &buffer[n as usize..];
 
-    let (n, row_id) = read_varint_at(buffer, 0);
+    let (n, _) = read_varint_at(buffer, 0);
     buffer = &buffer[n as usize..];
 
     let (local_size, overflow_size) = header.local_and_overflow_size(db_header, size as usize)?;
@@ -242,8 +235,6 @@ fn parse_table_leaf_cell(
     let payload = buffer[..local_size].to_vec();
 
     Ok(page::TableLeafCell {
-        size,
-        row_id,
         payload,
         first_overflow,
     }
@@ -253,16 +244,10 @@ fn parse_table_leaf_cell(
 fn parse_table_interior_cell(
     _: &DbHeader,
     _: &PageHeader,
-    mut buffer: &[u8],
+    buffer: &[u8],
 ) -> anyhow::Result<page::Cell> {
-    let left_child_page = read_be_double_at(buffer, 0);
-    buffer = &buffer[4..];
-
-    let (_, key) = read_varint_at(buffer, 0);
-
     Ok(page::TableInteriorCell {
-        left_child_page,
-        key,
+        left_child_page: read_be_double_at(buffer, 0),
     }
     .into())
 }
@@ -274,13 +259,7 @@ fn parse_page_header(buffer: &[u8]) -> anyhow::Result<page::PageHeader> {
         _ => anyhow::bail!("unknown page type: {}", buffer[0]),
     };
 
-    let first_freeblock = read_be_word_at(buffer, PAGE_FIRST_FREEBLOCK_OFFSET);
     let cell_count = read_be_word_at(buffer, PAGE_CELL_COUNT_OFFSET);
-    let cell_content_offset = match read_be_word_at(buffer, PAGE_CELL_CONTENT_OFFSET) {
-        0 => 65536,
-        n => n as u32,
-    };
-    let fragmented_bytes_count = buffer[PAGE_FRAGMENTED_BYTES_COUNT_OFFSET];
 
     let rightmost_pointer = if rightmost_ptr {
         Some(read_be_double_at(buffer, PAGE_RIGHTMOST_POINTER_OFFSET))
@@ -290,10 +269,7 @@ fn parse_page_header(buffer: &[u8]) -> anyhow::Result<page::PageHeader> {
 
     Ok(page::PageHeader {
         page_type,
-        first_freeblock,
         cell_count,
-        cell_content_offset,
-        fragmented_bytes_count,
         rightmost_pointer,
     })
 }
