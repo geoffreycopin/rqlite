@@ -4,7 +4,6 @@ use anyhow::Context;
 
 use crate::{
     cursor::{Cursor, Scanner},
-    page::DbHeader,
     pager::{self, Pager},
     sql::{self, ast},
 };
@@ -52,7 +51,6 @@ impl TableMetadata {
 }
 
 pub struct Db {
-    pub header: DbHeader,
     pub tables_metadata: Vec<TableMetadata>,
     pager: Pager,
 }
@@ -72,7 +70,6 @@ impl Db {
         let tables_metadata = Self::collect_tables_metadata(pager.clone())?;
 
         Ok(Db {
-            header,
             pager,
             tables_metadata,
         })
