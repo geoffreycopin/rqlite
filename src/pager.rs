@@ -4,13 +4,14 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow, bail};
 
-use crate::page;
+use crate::page::{self, DbHeader, PageHeader};
 
 pub const HEADER_SIZE: usize = 100;
 const HEADER_PREFIX: &[u8] = b"SQLite format 3\0";
 const HEADER_PAGE_SIZE_OFFSET: usize = 16;
+const HEADER_PAGE_RESERVED_SIZE_OFFSET: usize = 20;
 
 const PAGE_MAX_SIZE: u32 = 65536;
 
@@ -23,31 +24,85 @@ const PAGE_CELL_CONTENT_OFFSET: usize = 5;
 const PAGE_FRAGMENTED_BYTES_COUNT_OFFSET: usize = 7;
 const PAGE_RIGHTMOST_POINTER_OFFSET: usize = 8;
 
+#[derive(Debug, Clone)]
+enum CachedPage {
+    Page(Arc<page::Page>),
+    Overflow(Arc<page::OverflowPage>),
+}
+
+impl From<Arc<page::Page>> for CachedPage {
+    fn from(value: Arc<page::Page>) -> Self {
+        CachedPage::Page(value)
+    }
+}
+
+impl TryFrom<CachedPage> for Arc<page::Page> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: CachedPage) -> Result<Self, Self::Error> {
+        if let CachedPage::Page(p) = value {
+            Ok(p.clone())
+        } else {
+            bail!("expected a regular page")
+        }
+    }
+}
+
+impl From<Arc<page::OverflowPage>> for CachedPage {
+    fn from(value: Arc<page::OverflowPage>) -> Self {
+        CachedPage::Overflow(value)
+    }
+}
+
+impl TryFrom<CachedPage> for Arc<page::OverflowPage> {
+    type Error = anyhow::Error;
+
+    fn try_from(value: CachedPage) -> Result<Self, Self::Error> {
+        if let CachedPage::Overflow(o) = value {
+            Ok(o.clone())
+        } else {
+            bail!("expected an overflow page")
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Pager<I: Read + Seek = std::fs::File> {
     input: Arc<Mutex<I>>,
-    page_size: usize,
-    pages: Arc<RwLock<HashMap<usize, Arc<page::Page>>>>,
+    pages: Arc<RwLock<HashMap<usize, CachedPage>>>,
+    header: DbHeader,
 }
 
 impl<I: Read + Seek> Pager<I> {
-    pub fn new(input: I, page_size: usize) -> Self {
+    pub fn new(header: DbHeader, input: I) -> Self {
         Self {
             input: Arc::new(Mutex::new(input)),
-            page_size,
             pages: Arc::default(),
+            header,
         }
     }
 
+    pub fn read_overflow(&self, n: usize) -> anyhow::Result<Arc<page::OverflowPage>> {
+        self.load(n, |buffer| Ok(parse_overflow_page(buffer)))
+    }
+
     pub fn read_page(&self, n: usize) -> anyhow::Result<Arc<page::Page>> {
+        self.load(n, |buffer| parse_page(&self.header, buffer, n))
+    }
+
+    fn load<T>(&self, n: usize, f: impl Fn(&[u8]) -> anyhow::Result<T>) -> anyhow::Result<Arc<T>>
+    where
+        Arc<T>: Into<CachedPage>,
+        CachedPage: TryInto<Arc<T>, Error = anyhow::Error>,
+    {
         {
             let read_pages = self
                 .pages
                 .read()
-                .map_err(|_| anyhow!("failed to acquire pager read lock"))?;
+                .map_err(|_| anyhow!("poisoned page cache lock"))?;
 
-            if let Some(page) = read_pages.get(&n) {
-                return Ok(page.clone());
+            if let Some(page) = read_pages.get(&n).cloned() {
+                return page.try_into();
             }
         }
 
@@ -56,31 +111,35 @@ impl<I: Read + Seek> Pager<I> {
             .write()
             .map_err(|_| anyhow!("failed to acquire pager write lock"))?;
 
-        if let Some(page) = write_pages.get(&n) {
-            return Ok(page.clone());
+        if let Some(page) = write_pages.get(&n).cloned() {
+            return page.try_into();
         }
 
-        let page = self.load_page(n)?;
-        write_pages.insert(n, page.clone());
-        Ok(page)
+        let buffer = self.load_raw(n)?;
+        let parsed = f(&buffer[0..self.header.usable_page_size()])?;
+        let ptr = Arc::new(parsed);
+
+        write_pages.insert(n, ptr.clone().into());
+
+        Ok(ptr)
     }
 
-    fn load_page(&self, n: usize) -> anyhow::Result<Arc<page::Page>> {
-        let offset = n.saturating_sub(1) * self.page_size;
+    fn load_raw(&self, n: usize) -> anyhow::Result<Vec<u8>> {
+        let offset = n.saturating_sub(1) * self.header.page_size as usize;
 
         let mut input_guard = self
             .input
             .lock()
-            .map_err(|_| anyhow!("failed to lock pager mutex"))?;
+            .map_err(|_| anyhow!("poisoned pager mutex"))?;
 
         input_guard
             .seek(SeekFrom::Start(offset as u64))
             .context("seek to page start")?;
 
-        let mut buffer = vec![0; self.page_size];
+        let mut buffer = vec![0; self.header.page_size as usize];
         input_guard.read_exact(&mut buffer).context("read page")?;
 
-        Ok(Arc::new(parse_page(&buffer, n)?))
+        Ok(buffer)
     }
 }
 
@@ -88,9 +147,17 @@ impl Clone for Pager {
     fn clone(&self) -> Self {
         Self {
             input: self.input.clone(),
-            page_size: self.page_size,
             pages: self.pages.clone(),
+            header: self.header,
         }
+    }
+}
+
+fn parse_overflow_page(buffer: &[u8]) -> page::OverflowPage {
+    let next = read_be_double_at(buffer, 0);
+    page::OverflowPage {
+        payload: buffer[4..].to_vec(),
+        next: if next != 0 { Some(next as usize) } else { None },
     }
 }
 
@@ -107,10 +174,15 @@ pub fn parse_header(buffer: &[u8]) -> anyhow::Result<page::DbHeader> {
         _ => anyhow::bail!("page size is not a power of 2: {}", page_size_raw),
     };
 
-    Ok(page::DbHeader { page_size })
+    let page_reserved_size = buffer[HEADER_PAGE_RESERVED_SIZE_OFFSET];
+
+    Ok(page::DbHeader {
+        page_size,
+        page_reserved_size,
+    })
 }
 
-fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
+fn parse_page(db_header: &DbHeader, buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
     let ptr_offset = if page_num == 1 { HEADER_SIZE as u16 } else { 0 };
     let content_buffer = &buffer[ptr_offset as usize..];
     let header = parse_page_header(content_buffer)?;
@@ -125,7 +197,13 @@ fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
         page::PageType::TableInterior => parse_table_interior_cell,
     };
 
-    let cells = parse_cells(content_buffer, &cell_pointers, cells_parsing_fn)?;
+    let cells = parse_cells(
+        db_header,
+        &header,
+        content_buffer,
+        &cell_pointers,
+        cells_parsing_fn,
+    )?;
 
     Ok(page::Page {
         header,
@@ -135,34 +213,48 @@ fn parse_page(buffer: &[u8], page_num: usize) -> anyhow::Result<page::Page> {
 }
 
 fn parse_cells(
+    db_header: &DbHeader,
+    header: &PageHeader,
     buffer: &[u8],
     cell_pointers: &[u16],
-    parse_fn: impl Fn(&[u8]) -> anyhow::Result<page::Cell>,
+    parse_fn: impl Fn(&DbHeader, &PageHeader, &[u8]) -> anyhow::Result<page::Cell>,
 ) -> anyhow::Result<Vec<page::Cell>> {
     cell_pointers
         .iter()
-        .map(|&ptr| parse_fn(&buffer[ptr as usize..]))
+        .map(|&ptr| parse_fn(db_header, header, &buffer[ptr as usize..]))
         .collect()
 }
 
-fn parse_table_leaf_cell(mut buffer: &[u8]) -> anyhow::Result<page::Cell> {
+fn parse_table_leaf_cell(
+    db_header: &DbHeader,
+    header: &PageHeader,
+    mut buffer: &[u8],
+) -> anyhow::Result<page::Cell> {
     let (n, size) = read_varint_at(buffer, 0);
     buffer = &buffer[n as usize..];
 
     let (n, row_id) = read_varint_at(buffer, 0);
     buffer = &buffer[n as usize..];
 
-    let payload = buffer[..size as usize].to_vec();
+    let (local_size, overflow_size) = header.local_and_overflow_size(db_header, size as usize)?;
+    let first_overflow = overflow_size.map(|_| read_be_double_at(buffer, local_size) as usize);
+
+    let payload = buffer[..local_size].to_vec();
 
     Ok(page::TableLeafCell {
         size,
         row_id,
         payload,
+        first_overflow,
     }
     .into())
 }
 
-fn parse_table_interior_cell(mut buffer: &[u8]) -> anyhow::Result<page::Cell> {
+fn parse_table_interior_cell(
+    _: &DbHeader,
+    _: &PageHeader,
+    mut buffer: &[u8],
+) -> anyhow::Result<page::Cell> {
     let left_child_page = read_be_double_at(buffer, 0);
     buffer = &buffer[4..];
 
@@ -237,7 +329,7 @@ pub fn read_varint_at(buffer: &[u8], mut offset: usize) -> (u8, i64) {
     (size, result)
 }
 
-fn read_be_double_at(input: &[u8], offset: usize) -> u32 {
+pub fn read_be_double_at(input: &[u8], offset: usize) -> u32 {
     u32::from_be_bytes(input[offset..offset + 4].try_into().unwrap())
 }
 

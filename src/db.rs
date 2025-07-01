@@ -17,9 +17,9 @@ pub struct TableMetadata {
 }
 
 impl TableMetadata {
-    fn from_cursor(cursor: Cursor) -> anyhow::Result<Option<Self>> {
+    fn from_cursor(mut cursor: Cursor) -> anyhow::Result<Option<Self>> {
         let type_value = cursor
-            .field(0)
+            .field(0)?
             .context("missing type field")
             .context("invalid type field")?;
 
@@ -28,7 +28,7 @@ impl TableMetadata {
         }
 
         let create_stmt = cursor
-            .field(4)
+            .field(4)?
             .context("missing create statement")
             .context("invalid create statement")?
             .as_str()
@@ -38,7 +38,7 @@ impl TableMetadata {
         let create = sql::parse_create_statement(&create_stmt)?;
 
         let first_page = cursor
-            .field(3)
+            .field(3)?
             .context("missing table first page")?
             .as_int()
             .context("table first page should be an integer")? as usize;
@@ -67,7 +67,7 @@ impl Db {
 
         let header = pager::parse_header(&header_buffer).context("parse db header")?;
 
-        let pager = Pager::new(file, header.page_size as usize);
+        let pager = Pager::new(header, file);
 
         let tables_metadata = Self::collect_tables_metadata(pager.clone())?;
 
