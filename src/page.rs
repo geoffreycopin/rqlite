@@ -1,6 +1,15 @@
+use anyhow::bail;
+
 #[derive(Debug, Copy, Clone)]
 pub struct DbHeader {
     pub page_size: u32,
+    pub page_reserved_size: u8,
+}
+
+impl DbHeader {
+    pub fn usable_page_size(&self) -> usize {
+        self.page_size as usize - (self.page_reserved_size as usize)
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -27,6 +36,40 @@ impl PageHeader {
             8
         }
     }
+
+    pub fn local_and_overflow_size(
+        &self,
+        db_header: &DbHeader,
+        payload_size: usize,
+    ) -> anyhow::Result<(usize, Option<usize>)> {
+        let local = self.local_payload_size(&db_header, payload_size)?;
+        if local == payload_size {
+            Ok((local, None))
+        } else {
+            Ok((local, Some(payload_size.saturating_sub(local))))
+        }
+    }
+
+    fn local_payload_size(
+        &self,
+        db_header: &DbHeader,
+        payload_size: usize,
+    ) -> anyhow::Result<usize> {
+        match self.page_type {
+            PageType::TableInterior => bail!("no payload size for interior pages"),
+            PageType::TableLeaf => {
+                let usable = db_header.usable_page_size();
+                let max_size = usable - 35;
+                if payload_size <= max_size {
+                    return Ok(payload_size);
+                }
+                let min_size = ((usable - 12) * 32 / 255) - 23;
+                let k = min_size + ((payload_size - min_size) % (usable - 4));
+                let size = if k <= max_size { k } else { min_size };
+                Ok(size)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +90,7 @@ pub struct TableLeafCell {
     pub size: i64,
     pub row_id: i64,
     pub payload: Vec<u8>,
+    pub first_overflow: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,4 +115,10 @@ impl From<TableInteriorCell> for Cell {
     fn from(cell: TableInteriorCell) -> Self {
         Cell::TableInterior(cell)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct OverflowPage {
+    pub next: Option<usize>,
+    pub payload: Vec<u8>,
 }

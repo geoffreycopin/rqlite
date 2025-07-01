@@ -1,5 +1,7 @@
 use std::{borrow::Cow, sync::Arc};
 
+use anyhow::Context;
+
 use crate::{
     page::{Cell, Page, PageType},
     pager::Pager,
@@ -26,6 +28,26 @@ pub enum RecordFieldType {
 pub struct RecordField {
     pub offset: usize,
     pub field_type: RecordFieldType,
+}
+
+impl RecordField {
+    pub fn end_offset(&self) -> usize {
+        let size = match self.field_type {
+            RecordFieldType::Null => 0,
+            RecordFieldType::I8 => 1,
+            RecordFieldType::I16 => 2,
+            RecordFieldType::I24 => 3,
+            RecordFieldType::I32 => 4,
+            RecordFieldType::I48 => 5,
+            RecordFieldType::I64 => 8,
+            RecordFieldType::Float => 8,
+            RecordFieldType::Zero => 0,
+            RecordFieldType::One => 0,
+            RecordFieldType::String(size) | RecordFieldType::Blob(size) => size,
+        };
+
+        self.offset + size
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -81,17 +103,34 @@ fn parse_record_header(mut buffer: &[u8]) -> anyhow::Result<RecordHeader> {
 pub struct Cursor {
     header: RecordHeader,
     payload: Vec<u8>,
+    pager: Pager,
+    next_overflow_page: Option<usize>,
 }
 
 impl Cursor {
-    pub fn owned_field(&self, n: usize) -> Option<OwnedValue> {
-        self.field(n).map(Into::into)
+    pub fn owned_field(&mut self, n: usize) -> anyhow::Result<Option<OwnedValue>> {
+        Ok(self.field(n)?.map(Into::into))
     }
 
-    pub fn field(&self, n: usize) -> Option<Value> {
-        let record_field = self.header.fields.get(n)?;
+    pub fn field(&mut self, n: usize) -> anyhow::Result<Option<Value>> {
+        let Some(record_field) = self.header.fields.get(n) else {
+            return Ok(None);
+        };
 
-        match record_field.field_type {
+        let end_offset = record_field.end_offset();
+
+        if end_offset > (self.payload.len() - 1)
+            && let Some(overflow_page) = self.next_overflow_page
+        {
+            let overflow_size = end_offset.saturating_sub(self.payload.len());
+            let (next_overflow, overflow_data) = OverflowScanner::new(self.pager.clone())
+                .read(overflow_page, overflow_size)
+                .context("read overflow page")?;
+            self.next_overflow_page = next_overflow;
+            self.payload.extend_from_slice(&overflow_data);
+        }
+
+        let value = match record_field.field_type {
             RecordFieldType::Null => Some(Value::Null),
             RecordFieldType::I8 => Some(Value::Int(read_i8_at(&self.payload, record_field.offset))),
             RecordFieldType::I16 => {
@@ -126,7 +165,9 @@ impl Cursor {
             }
             RecordFieldType::One => Some(Value::Int(1)),
             RecordFieldType::Zero => Some(Value::Int(0)),
-        }
+        };
+
+        Ok(value)
     }
 }
 
@@ -220,6 +261,8 @@ impl Scanner {
     }
 
     fn next_elem(&mut self) -> anyhow::Result<Option<ScannerElem>> {
+        let pager = self.pager.clone();
+
         let Some(page) = self.current_page()? else {
             return Ok(None);
         };
@@ -238,6 +281,8 @@ impl Scanner {
                 Ok(Some(ScannerElem::Cursor(Cursor {
                     header,
                     payload: cell.payload.clone(),
+                    pager,
+                    next_overflow_page: cell.first_overflow,
                 })))
             }
             Cell::TableInterior(cell) => Ok(Some(ScannerElem::Page(cell.left_child_page))),
@@ -262,4 +307,30 @@ impl Scanner {
 enum ScannerElem {
     Page(u32),
     Cursor(Cursor),
+}
+
+#[derive(Debug)]
+struct OverflowScanner {
+    pager: Pager,
+}
+
+impl OverflowScanner {
+    pub fn new(pager: Pager) -> Self {
+        Self { pager }
+    }
+
+    pub fn read(&self, first_page: usize, size: usize) -> anyhow::Result<(Option<usize>, Vec<u8>)> {
+        let mut next_page = Some(first_page);
+        let mut buffer = Vec::with_capacity(size);
+
+        while buffer.len() < size
+            && let Some(next) = next_page
+        {
+            let overflow = self.pager.read_overflow(next)?;
+            next_page = overflow.next;
+            buffer.extend_from_slice(&overflow.payload);
+        }
+
+        Ok((next_page, buffer))
+    }
 }

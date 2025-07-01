@@ -34,12 +34,12 @@ impl SeqScan {
     }
 
     fn next_row(&mut self) -> anyhow::Result<Option<&[OwnedValue]>> {
-        let Some(record) = self.scanner.next_record()? else {
+        let Some(mut record) = self.scanner.next_record()? else {
             return Ok(None);
         };
 
         for (i, &n) in self.fields.iter().enumerate() {
-            self.row_buffer[i] = record.owned_field(n).context("missing record field")?;
+            self.row_buffer[i] = record.owned_field(n)?.context("missing record field")?;
         }
 
         Ok(Some(&self.row_buffer))
